@@ -88,10 +88,14 @@ def run_test_bucket(model: str, model_type: str, bucket: str) -> Tuple[bool, str
         "--tb=short", "-rA", "--color=yes"
     ]
     
-    result = subprocess.run(
-        cmd, cwd=AI_ENDPOINTS_DIR,
-        capture_output=True, text=True
-    )
+    try:
+        result = subprocess.run(
+            cmd, cwd=AI_ENDPOINTS_DIR,
+            capture_output=True, text=True,
+            timeout=600
+        )
+    except subprocess.TimeoutExpired:
+        return False, "TIMEOUT: Test execution runs slower than expected. "
     
     if result.returncode == 0:
         return True, "PASSED"
