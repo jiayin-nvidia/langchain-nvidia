@@ -1,4 +1,5 @@
 import csv
+import argparse
 import os
 import re
 import subprocess
@@ -17,6 +18,9 @@ CHAT_RESULTS_CSV = RESULTS_DIR / "chat_models_results.csv"
 EMBEDDING_RESULTS_CSV = RESULTS_DIR / "embedding_models_results.csv"
 VLM_RESULTS_CSV = RESULTS_DIR / "vlm_models_results.csv"
 COMPLETION_RESULTS_CSV = RESULTS_DIR / "completion_models_results.csv"
+RERANK_RESULTS_CSV = RESULTS_DIR / "rerank_models_results.csv"
+QA_RESULTS_CSV = RESULTS_DIR / "qa_models_results.csv"
+
 
 MODEL_TEST_CONFIG = {
     "chat": {
@@ -54,6 +58,20 @@ MODEL_TEST_CONFIG = {
         },
         "csv_columns": ["Model", "Error"],
         "column_map": {"main": "Error"}
+    },
+    "rerank": {
+        "test_buckets": {
+            "main": (["test_ranking.py"], "--rerank-model-id"),
+        },
+        "csv_columns": ["Model", "Error"],
+        "column_map": {"main": "Error"}
+    },
+    "qa": {
+        "test_buckets": {
+            "main": (["test_other_models.py"], "--qa-model-id"),
+        },
+        "csv_columns": ["Model", "Error"],
+        "column_map": {"main": "Error"}
     }
 }
 
@@ -63,14 +81,21 @@ ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 def get_models(model_type: str) -> List[str]:
     sys.path.insert(0, str(AI_ENDPOINTS_DIR))
     from langchain_nvidia_ai_endpoints._statics import (
-        CHAT_MODEL_TABLE, EMBEDDING_MODEL_TABLE, VLM_MODEL_TABLE, COMPLETION_MODEL_TABLE
+        CHAT_MODEL_TABLE,
+        EMBEDDING_MODEL_TABLE,
+        VLM_MODEL_TABLE,
+        COMPLETION_MODEL_TABLE,
+        RANKING_MODEL_TABLE,
+        QA_MODEL_TABLE,
     )
     
     tables = {
         "chat": CHAT_MODEL_TABLE,
         "embedding": EMBEDDING_MODEL_TABLE, 
         "vlm": VLM_MODEL_TABLE,
-        "completion": COMPLETION_MODEL_TABLE
+        "completion": COMPLETION_MODEL_TABLE,
+        "rerank": RANKING_MODEL_TABLE,
+        "qa": QA_MODEL_TABLE,
     }
     
     if model_type not in tables:
@@ -92,10 +117,10 @@ def run_test_bucket(model: str, model_type: str, bucket: str) -> Tuple[bool, str
         result = subprocess.run(
             cmd, cwd=AI_ENDPOINTS_DIR,
             capture_output=True, text=True,
-            timeout=600
+            timeout=600,
         )
     except subprocess.TimeoutExpired:
-        return False, "TIMEOUT: Test execution runs slower than expected. "
+        return False, "TIMEOUT"
     
     if result.returncode == 0:
         return True, "PASSED"
@@ -152,9 +177,15 @@ def run_model_tests(model_type: str, results_csv: Path) -> None:
                         print(f"  - {bucket}…", end=" ", flush=True)
                     passed, msg = run_test_bucket(model, model_type, bucket)
                     if bucket_count > 1:
-                        print("ok" if passed else "FAIL")
+                        if passed:
+                            print("ok")
+                        else:
+                            print("TIMEOUT" if str(msg).upper().startswith("TIMEOUT") else "FAIL")
                     else:
-                        print(" ok" if passed else " FAIL")
+                        if passed:
+                            print(" ok")
+                        else:
+                            print(" TIMEOUT" if str(msg).upper().startswith("TIMEOUT") else " FAIL")
                     
                     row[column_map[bucket]] = msg
                 
@@ -172,18 +203,35 @@ def run_model_tests(model_type: str, results_csv: Path) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="LangChain model tests. ")
+    choices = list(MODEL_TEST_CONFIG.keys()) + ["all"]
+    parser.add_argument(
+        "-t",
+        "--types",
+        choices=choices,
+        nargs="+",
+        default=["all"],
+        help="Which model types to test. Use 'all' or any of: " + ", ".join(sorted(MODEL_TEST_CONFIG.keys())),
+    )
+    args = parser.parse_args()
+
+    selected_types = list(MODEL_TEST_CONFIG.keys()) if "all" in args.types else args.types
+
     result_files = {
         "chat": CHAT_RESULTS_CSV,
         "embedding": EMBEDDING_RESULTS_CSV,
         "vlm": VLM_RESULTS_CSV,
-        "completion": COMPLETION_RESULTS_CSV
+        "completion": COMPLETION_RESULTS_CSV,
+        "rerank": RERANK_RESULTS_CSV,
+        "qa": QA_RESULTS_CSV,
     }
     
-    for model_type in MODEL_TEST_CONFIG.keys():
+    for model_type in selected_types:
         run_model_tests(model_type, result_files[model_type])
     
     print(f"All results saved to: {RESULTS_DIR}")
-    for model_type, csv_file in result_files.items():
+    for model_type in selected_types:
+        csv_file = result_files[model_type]
         print(f"  - {model_type.capitalize()} models: {csv_file.name}")
 
 
